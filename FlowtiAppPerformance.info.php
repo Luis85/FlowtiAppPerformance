@@ -5,7 +5,7 @@ $info = array(
 	'title' => 'Flowti Module Performance Monitor', 
 	'summary' => 'Track and profile your Sites Admin Modules', 
 
-	'version' => 10, 
+	'version' => 11, 
 	'author' => 'Luis Mendez', 
 	'href' => 'https://github.com/Luis85/FlowtiAppPerformance',
 	'icon' => 'flask', 
@@ -21,7 +21,7 @@ $info = array(
 	'installs' => array('FlowtiModuleProfiler'),
 	'nav' => array(
 		array(
-			'url' => 'database/',
+			'url' => 'database',
 			'label' => 'Database', 
 			'permission' => 'flowti-profiler',
 			'icon' => 'database', 
