@@ -5,6 +5,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
     protected $data = array();
     private $profiles = array();
     private $allData = array();
+    private $categories = array();
 
     static public function getDefaultData() {
         return array(
@@ -123,17 +124,15 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
 
         return $wrapper;
     }
-    public function init(){
-
-        $this->prepareData();
+    public function init(){       
 
         $this->config->scripts->add('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.7.1/Chart.bundle.min.js');
-        $this->config->scripts->add('http://www.chartjs.org/samples/latest/utils.js');
+        $this->config->scripts->add('https://www.chartjs.org/samples/latest/utils.js');
         parent::init();
     }
 
     public function ___execute(){
-
+        
         $fieldset = $this->modules->get('InputfieldFieldset');
         $fieldset->collapsed = Inputfield::collapsedNever;
 
@@ -145,7 +144,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $fieldset->add($field);
 
         $field = $this->modules->get('InputfieldMarkup');
-        $field->label = 'Logged Profiles '.$this->profiles->count;
+        $field->label = 'Logged Profiles '.$this->page->numDescendants('parent!='.$this->data['logsparent']);
         $field->collapsed = Inputfield::collapsedNever;
         $field->value = '<a id="db-btn" class="uk-button uk-button-default uk-button-small" href="./database">View</a>';
         $field->columnWidth = 50;
@@ -167,29 +166,19 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $field->columnWidth = 50;
         $fieldset->add($field);
 
-        $field = $this->modules->get('InputfieldMarkup');
-        $field->collapsed = Inputfield::collapsedNever;
-        $field->value = '<p class="uk-text-center">Peak '.$this->allData['sum']['memory']['peak'].' MB</p>';
-        $field->columnWidth = 50;
-        $fieldset->add($field);
-
-        $field = $this->modules->get('InputfieldMarkup');
-        $field->collapsed = Inputfield::collapsedNever;
-        $field->value = '<p class="uk-text-center">Peak '.$this->allData['sum']['time']['peak'].' ms</p>';
-        $field->columnWidth = 50;
-        $fieldset->add($field);
-
         return $fieldset->render();
     }
     public function ___executeDatabase(){
-
+        $this->config->scripts->add('https://cdn.datatables.net/1.10.20/js/jquery.dataTables.min.js'); 
+        $this->config->styles->add('https://cdn.datatables.net/1.10.20/css/jquery.dataTables.min.css');        
         return array(
-            'table' => $this->renderTable()
+            'tableModules' => $this->page->children(),
         );
     }
     public function ___executeClearlogs(){
-        $count = $this->profiles->count;
-        foreach($this->profiles as $item){
+        $profiles = $this->pages->findMany('include=all,template=flowti-performance-monitor');
+        $count = $profiles->count;
+        foreach($profiles as $item){
             $this->pages->delete($item, true);
         }
         $this->message($count.' Profiles cleared');
@@ -200,7 +189,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
     public function ___executeGetAvgChartData(){
         header("Content-Type: application/json;charset=utf-8");
         if(!$this->input->get->data || !$this->config->ajax) return;
-
+        $this->prepareData();
         $response = array();
         $dataset = $this->input->get->text('data');
         $dataset = str_replace('avg', '',$dataset);
@@ -211,27 +200,70 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         return json_encode($response);
 
     }
+    public function ___executeGetDatatable(){
+        header("Content-Type: application/json;charset=utf-8");
+        if(!$this->config->ajax) return;
+        $response = array();
 
-    protected function ___renderTable(){
+        $pwfilter = 'parent!='.$this->data['logsparent'].',include=all,template=flowti-performance-monitor';
+        $start = $this->input->post->int('start');
 
-        $table = $this->modules->get('MarkupAdminDataTable');
-        $table->headerRow(['Module', 'Method', 'Page', 'Memory', 'Time', 'SysLoad']);
+        $limit = 10;
+        if($this->input->post->int('length') > 0) $limit = $this->input->post->int('length');
+        
+        $searchstring = $this->sanitizer->text($this->input->post->search['value']);
+        $search = ',flowti_performance_monitor_body%='.$searchstring;
 
-        foreach($this->profiles as $item) {
-            if($item->parent->template == 'admin') continue;
-            $content = json_decode($item->flowti_performance_monitor_body);
-            $table->row([
-                $item->parent->title,
-                $content->profile_method,
-                $content->profile_page,
-                $content->profile_memory_used.' MB',
-                $content->profile_exectime.' ms',
-                $content->profile_avg_sysload. '%'
-            ]);
+        $filter = false;
+        if($this->input->get->filter) $filter = ',flowti_performance_monitor_body%='.$this->input->get->text('filter');
+        
+        $selector = ',start='.$start.',limit='.$limit;
+        $sort = ',sort=sort';
+
+        if(isset($this->input->post->order) && $this->input->post->order[0]['dir'] == 'desc') $sort = ',sort=-sort';
+        
+        $logs = $this->pages->findMany($pwfilter.$selector.$search.$sort.$filter);        
+
+        $response = [
+            'draw' => $this->input->post->int('draw'),
+            'recordsTotal' => $logs->getTotal(),
+            'recordsFiltered' => $logs->getTotal(),
+            'start' => $logs->getStart(),
+            'limit' => $logs->getLimit(),
+            'search' => $search,
+            'data' => array(),
+            'avgMem' => 0,
+            'avgTime' => 0,
+            'avgLoad' => 0,
+        ];
+
+        $memory = 0;
+        $time = 0;
+        $load = 0;
+        $counter = 0;
+        foreach($logs as $log){
+            $counter++;
+            $title = (string)$log->parent->title;
+            $log = json_decode($log->flowti_performance_monitor_body);
+            $memory += $log->profile_memory_used; 
+            $time += $log->profile_exectime;
+            $load += $log->profile_avg_sysload;
+            $response['data'][] = [
+                'module' => '<span class="cell-filter">'.$title.'</span>', 
+                'method' => '<span class="cell-filter">'.$log->profile_method.'</span>',
+                'page' => $log->profile_page,
+                'memory' => round($log->profile_memory_used,4),
+                'time' => round($log->profile_exectime,4),
+                'sysload' => $log->profile_avg_sysload.'%'
+            ];
         }
-
-        return $table->render();
+        $response['avgMem'] = round($memory / $counter, 2);
+        $response['avgTime'] = round($time / $counter, 2);
+        $response['avgLoad'] = round($load / $counter, 2);
+        
+        return json_encode($response);
     }
+
     protected function getAllData(){
 
         $averages = array();
@@ -272,9 +304,9 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         return $averages;
     }
     protected function prepareData(){
-
-        $profiles = $this->pages->find("include=all,template=flowti-performance-monitor,sort=-sort");
-
+        $profiles = $this->pages->findMany('parent!='.$this->data['logsparent'].',include=all,template=flowti-performance-monitor,sort=-sort');
+        $categories = $this->pages->find('include=all,parent='.$this->data['logsparent']);
+        $this->categories = $categories;
         $this->profiles = $profiles;
         $this->allData = $this->getAllData();
     }
