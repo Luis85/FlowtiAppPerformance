@@ -3,34 +3,34 @@
 class FlowtiAppPerformance extends Process implements Module, ConfigurableModule{
 
     protected $data = array();
-    private $profiles = array();    
+    private $profiles = array();
     private $allData = array();
 
     static public function getDefaultData() {
-		return array(
+        return array(
             'enabled' => 1,
-			'modules' => array(),
+            'modules' => array(),
             'maxlogs' => 50,
             'pwlogs' => 0,
             'tracy' => 1,
             'configured' => 0,
             'continue' => 1,
             'logsparent' => false,
-		);
-	}
-	public function __construct() {        
-		foreach(self::getDefaultData() as $key => $value) {
-				$this->$key = $value;
-		}
-	}
-	public function getModuleConfigInputfields(array $data){
-		
-		$data = array_merge(self::getDefaultData(), $data);
-        
+        );
+    }
+    public function __construct() {
+        foreach(self::getDefaultData() as $key => $value) {
+                $this->$key = $value;
+        }
+    }
+    public function getModuleConfigInputfields(array $data){
+
+        $data = array_merge(self::getDefaultData(), $data);
+
         $modules = wire('modules')->findByInfo('id=*');
 
         $wrapper = new InputfieldWrapper();
-        
+
         $fieldset = new InputfieldWrapper();
         $fieldset->columnWidth = 100;
         $f = wire('modules')->get('InputfieldToggle');
@@ -39,7 +39,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $f->val($data['enabled']);
         $f->description = 'Should the profiler save his data to the database?';
         $f->columnWidth = 33;
-        if($this->modules->isInstalled('TracyDebugger')) $f->columnWidth = 25;        
+        if($this->modules->isInstalled('TracyDebugger')) $f->columnWidth = 25;
         $fieldset->add($f);
 
         $f = wire('modules')->get('InputfieldToggle');
@@ -49,7 +49,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $f->showIf = "enabled=0";
         $f->description = 'Should the profiler save his data to PW logs?';
         $f->columnWidth = 33;
-        if($this->modules->isInstalled('TracyDebugger')) $f->columnWidth = 25;        
+        if($this->modules->isInstalled('TracyDebugger')) $f->columnWidth = 25;
         $fieldset->add($f);
 
         $f = wire('modules')->get('InputfieldToggle');
@@ -59,7 +59,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $f->description = 'Should the profiler override the oldest log?';
         $f->showIf = "enabled=1,maxlogs!=0";
         $f->columnWidth = 33;
-        if($this->modules->isInstalled('TracyDebugger')) $f->columnWidth = 25;        
+        if($this->modules->isInstalled('TracyDebugger')) $f->columnWidth = 25;
         $fieldset->add($f);
 
         if($this->modules->isInstalled('TracyDebugger')){
@@ -108,8 +108,8 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
             $info = wire('modules')->getModuleInfo($module, ['verbose' => true]);
             if(!$info['installed']) continue;
             if($info['core']) continue;
-			$f->addOption($module, $module);
-		}
+            $f->addOption($module, $module);
+        }
         $f->columnWidth = 100;
         if($data['modules']) $f->attr('value', $data['modules']);
         $fieldset->add($f);
@@ -119,23 +119,20 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $f->value = 1;
         $fieldset->add($f);
 
-        $wrapper->add($fieldset);	
+        $wrapper->add($fieldset);
 
-		return $wrapper;
-	}	
+        return $wrapper;
+    }
     public function init(){
 
         $this->prepareData();
-        
+
         $this->config->scripts->add('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.7.1/Chart.bundle.min.js');
         $this->config->scripts->add('http://www.chartjs.org/samples/latest/utils.js');
         parent::init();
     }
 
     public function ___execute(){
-
-
-        $logFolder = $this->pages->get('/app-performance/');
 
         $fieldset = $this->modules->get('InputfieldFieldset');
         $fieldset->collapsed = Inputfield::collapsedNever;
@@ -156,6 +153,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
 
         $field = $this->modules->get('InputfieldMarkup');
         $field->label = 'AVG MEMORY USAGE MB';
+        $field->id = 'avgmemorychart';
         $field->collapsed = Inputfield::collapsedNever;
         $field->value = '<canvas id="avgmemory"></canvas>';
         $field->columnWidth = 50;
@@ -163,11 +161,12 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
 
         $field = $this->modules->get('InputfieldMarkup');
         $field->label = 'AVG EXECUTION TIME MS';
+        $field->id = 'avgexectimechart';
         $field->collapsed = Inputfield::collapsedNever;
-        $field->value = '<canvas id="avgexectime"></canvas>';
+        $field->value = '<canvas id="avgtime"></canvas>';
         $field->columnWidth = 50;
         $fieldset->add($field);
-        
+
         $field = $this->modules->get('InputfieldMarkup');
         $field->collapsed = Inputfield::collapsedNever;
         $field->value = '<p class="uk-text-center">Peak '.$this->allData['sum']['memory']['peak'].' MB</p>';
@@ -196,28 +195,28 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $this->message($count.' Profiles cleared');
         $this->session->redirect('./');
     }
-    public function ___executeGetChartDataExecTime(){
+
+    //ajax endpoints
+    public function ___executeGetAvgChartData(){
         header("Content-Type: application/json;charset=utf-8");
+        if(!$this->input->get->data || !$this->config->ajax) return;
+
         $response = array();
+        $dataset = $this->input->get->text('data');
+        $dataset = str_replace('avg', '',$dataset);
+
         foreach($this->allData['items'] as $k => $v){
-            $response[] = ['label' => $k, 'val' => round($v['time']['avg'], 2)];
+            $response[] = ['label' => $k, 'val' => round($v[$dataset]['avg'], 2)];
         }
         return json_encode($response);
-    }
-    public function ___executeGetChartDataMemory(){
-        header("Content-Type: application/json;charset=utf-8");
-        $response = array();
-        foreach($this->allData['items'] as $k => $v){
-            $response[] = ['label' => $k, 'val' => round($v['memory']['avg'], 2)];
-        }
-        return json_encode($response);
+
     }
 
     protected function ___renderTable(){
-      
+
         $table = $this->modules->get('MarkupAdminDataTable');
         $table->headerRow(['Module', 'Method', 'Page', 'Memory', 'Time', 'SysLoad']);
-    
+
         foreach($this->profiles as $item) {
             if($item->parent->template == 'admin') continue;
             $content = json_decode($item->flowti_performance_monitor_body);
@@ -240,7 +239,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
         $averages['sum']['memory'] = ['total' => 0 ,'avg' => 0, 'peak' => 0];
         $averages['sum']['time'] = ['total' => 0 ,'avg' => 0, 'peak' => 0];
         $averages['items'] = array();
-    
+
         foreach($this->profiles as $item) {
             if(!$item->flowti_performance_monitor_body) continue;
             $title = (string)$item->parent->title;
@@ -262,7 +261,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
             }
             $averages['items'][$title]['count'] += 1;
             $averages['items'][$title]['memory']['total'] += $item->profile_memory_used;
-            $averages['items'][$title]['time']['total'] += $item->profile_exectime;            
+            $averages['items'][$title]['time']['total'] += $item->profile_exectime;
             $averages['items'][$title]['memory']['avg'] = $averages['items'][$title]['memory']['total'] / $averages['items'][$title]['count'];
             $averages['items'][$title]['time']['avg'] = $averages['items'][$title]['time']['total'] / $averages['items'][$title]['count'];
 
@@ -275,7 +274,7 @@ class FlowtiAppPerformance extends Process implements Module, ConfigurableModule
     protected function prepareData(){
 
         $profiles = $this->pages->find("include=all,template=flowti-performance-monitor,sort=-sort");
-        
+
         $this->profiles = $profiles;
         $this->allData = $this->getAllData();
     }
