@@ -3,11 +3,14 @@
 class FlowtiModuleProfiler extends WireData implements Module {
 
 	private $settings = false;
+	private $pageRenderTime = 0;
+	private $profileName = false;
+	private $profile = false;
 
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Flowti Profiler Service', 
-			'version' => 10, 
+			'version' => 11, 
 			'summary' => 'Hooks into ProcessController to log Admin Modules',
 			'href' => 'https://github.com/Luis85/FlowtiAppPerformance',
 			'author' => 'Luis Mendez',
@@ -26,8 +29,25 @@ class FlowtiModuleProfiler extends WireData implements Module {
 			return;
 		}  
 		$this->settings = $settings;
+		$this->profileName = $this->createProfileName();
+
+		$this->addHookBefore("Page::render", $this, 'startPageViewTimer');
+		$this->addHookAfter("Page::render", $this, 'startPageViewTimer');
+
 		$this->addHookBefore("ProcessController::execute", $this, 'startProfiler');
 		$this->addHookAfter("ProcessController::execute", $this, 'startProfiler');
+	}
+
+	public function startPageViewTimer(HookEvent $event){
+		$timer = 'PageRenderTime';
+		if($event->when == 'before'){
+			Debug::timer($timer); 
+			return;
+		}
+		Debug::saveTimer($timer);
+		$timer = Debug::getSavedTimer($timer)*1000;
+		$this->pageRenderTime = $timer;
+		if($this->settings['enabled'] || $this->settings['tracy']) $this->addRenderTime();
 	}
 
     public function startProfiler(HookEvent $event){
@@ -55,26 +75,20 @@ class FlowtiModuleProfiler extends WireData implements Module {
 		$mem = memory_get_peak_usage();
 		$mem = $mem/1000000;
 		$load = sys_getloadavg();
-		$name = time().rand(0,900000);
 
 		$profile['FlowtiPerformanceProfile'] = [
-			'profile_save' => $this->settings['enabled'],
-			'profile_pwlog' => $this->settings['pwlogs'],
-			'profile_user' => $this->user->id,
+			'profile_name' => $this->profileName,
 			'profile_class' => $class,
 			'profile_method' => $method.'()',
 			'profile_page' => $this->page->path(),
-			'profile_memory_used' => round($mem, 2),
+			'profile_memory_used' => $mem,
 			'profile_exectime' => Debug::getSavedTimer($timer)*1000,
-			'profile_avg_sysload' => floor($load[0]*100),
-			'profile_name' => (int)$name,
-			'profile_timestamp' => time(),
+			'profile_page_render_time' => 0,
+			'profile_avg_sysload' => floor($load[0]*10),
+			'profile_user' => $this->user->id,
+			'profile_timestamp' => time()
 		];
-
-		if($this->settings['tracy'] && $this->modules->isInstalled('TracyDebugger')){
-			bd($profile);
-		}
-		
+		$this->profile = $profile['FlowtiPerformanceProfile'];
 		if($this->settings['enabled'] == 0 && $this->settings['pwlogs'] == 0) return;
 		$this->createLogentry($profile['FlowtiPerformanceProfile']);
 	}
@@ -102,6 +116,31 @@ class FlowtiModuleProfiler extends WireData implements Module {
 			$this->pages->delete($parent->children()->first());
 		} 
 		$this->pages->add('flowti-performance-monitor', $parent , $logentry);
+	}
+
+	private function createProfileName(){
+		$name = time().md5(uniqid(rand(), true)).rand(1,1337);
+		return $name;
+	}
+
+	private function addRenderTime(){
+
+		$log = $this->pages->get('template=flowti-performance-monitor,name='.$this->profileName);
+
+		if($log->id){
+			$logBody = json_decode($log->flowti_performance_monitor_body, true);
+			$logBody['profile_page_render_time'] = $this->pageRenderTime;
+			$this->profile = $logBody;
+			$logBody = json_encode($logBody);
+			$log->setAndSave('flowti_performance_monitor_body', $logBody);
+		} else {
+			$this->profile['profile_page_render_time'] = $this->pageRenderTime;
+		} 
+
+		if($this->settings['tracy'] && $this->modules->isInstalled('TracyDebugger') && isset($this->profile['profile_name'])){
+			bd($this->profile);
+		}
+		
 	}
 
 	public function ___install() {
